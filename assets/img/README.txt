@@ -1,0 +1,1 @@
+Letakkan gambar QRIS merchant resmi dari bank/PJP di folder ini dengan nama qris-merchant.png. Aplikasi tidak membuat QRIS pembayaran palsu; tanpa file ini, halaman akan menampilkan petunjuk konfigurasi.

@@ -1,0 +1,1 @@
+<?php require_once __DIR__.'/includes/init.php'; if (!empty($_SESSION['user_id'])) redirect(role_home((string)$_SESSION['role'])); redirect('login.php');

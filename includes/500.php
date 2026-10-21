@@ -1,0 +1,5 @@
+<?php
+// Halaman ini untuk konfigurasi custom error document Apache atau pemanggilan aman dari handler aplikasi.
+if (!function_exists('h')) { function h($v): string { return htmlspecialchars((string)$v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); } }
+if (!defined('APP_BASE_URL')) define('APP_BASE_URL','/parkirstrd');
+?><!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>500 · ParkirSTRD</title><link rel="stylesheet" href="<?= h(APP_BASE_URL.'/assets/css/style.css') ?>"></head><body class="error-page"><main class="error-card"><div class="error-code">500</div><h1>Terjadi kesalahan sistem</h1><p>Permintaan belum dapat diselesaikan. Coba muat ulang halaman. Detail teknis hanya dicatat di log server.</p><a class="btn btn-primary" href="<?= h(APP_BASE_URL.'/index.php') ?>">Kembali ke aplikasi</a></main></body></html>

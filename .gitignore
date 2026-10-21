@@ -1,0 +1,19 @@
+/config/database.local.php
+/storage/logs/*
+!/storage/logs/.gitkeep
+.DS_Store
+
+# Rahasia integrasi pembayaran Midtrans
+/config/payment.local.php
+# Konfigurasi lokal dan kredensial
+/config/database.php
+/.env
+# Konfigurasi lokal dan rahasia
+/config/database.php
+/config/database.local.php
+/config/payment.local.php
+/.env
+
+# File backup lokal
+/backups/
+/backup/

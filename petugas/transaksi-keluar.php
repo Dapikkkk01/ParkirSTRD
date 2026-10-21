@@ -1,0 +1,35 @@
+<?php
+require_once __DIR__.'/../includes/init.php';require_role('petugas');require_once __DIR__.'/../includes/layout.php';$pdo=db();$error='';
+if($_SERVER['REQUEST_METHOD']==='POST'){
+ verify_csrf();
+ try{
+  $id=input_int('id_parkir');$method=(string)($_POST['metode_pembayaran']??'tunai');
+  if(!in_array($method,['tunai','qris'],true))throw new InvalidArgumentException('Metode pembayaran tidak valid.');
+  $pdo->beginTransaction();
+  $s=$pdo->prepare("SELECT t.id_parkir,t.id_area,t.waktu_masuk,t.status,t.tarif_saat_masuk,k.plat_nomor FROM tb_transaksi t JOIN tb_kendaraan k ON k.id_kendaraan=t.id_kendaraan WHERE t.id_parkir=? FOR UPDATE");$s->execute([$id]);$t=$s->fetch();
+  if(!$t)throw new InvalidArgumentException('Transaksi tidak ditemukan.');if($t['status']!=='masuk')throw new InvalidArgumentException('Transaksi ini sudah selesai diproses.');
+  $out=new DateTimeImmutable('now',new DateTimeZone('Asia/Jakarta'));$in=new DateTimeImmutable($t['waktu_masuk'],new DateTimeZone('Asia/Jakarta'));if($out<$in)throw new InvalidArgumentException('Waktu server tidak valid.');
+  $seconds=max(0,$out->getTimestamp()-$in->getTimestamp());$duration=max(1,(int)ceil($seconds/3600));$cost=$duration*(float)$t['tarif_saat_masuk'];
+  $a=$pdo->prepare('SELECT terisi FROM tb_area_parkir WHERE id_area=? FOR UPDATE');$a->execute([(int)$t['id_area']]);$occupied=$a->fetchColumn();if($occupied===false||(int)$occupied<1)throw new RuntimeException('Data kapasitas area tidak konsisten; hubungi Admin.');
+  $paymentStatus=$method==='qris'?'menunggu_verifikasi':'lunas';$paidAt=$method==='tunai'?$out->format('Y-m-d H:i:s'):null;
+  $u=$pdo->prepare("UPDATE tb_transaksi SET waktu_keluar=?,durasi_jam=?,biaya_total=?,status='keluar',metode_pembayaran=?,status_pembayaran=?,waktu_bayar=?,id_user_keluar=? WHERE id_parkir=? AND status='masuk'");
+  $u->execute([$out->format('Y-m-d H:i:s'),$duration,$cost,$method,$paymentStatus,$paidAt,current_user()['id'],$id]);if($u->rowCount()!==1)throw new RuntimeException('Transaksi sudah berubah atau tidak dapat diselesaikan.');
+  $a2=$pdo->prepare('UPDATE tb_area_parkir SET terisi=terisi-1 WHERE id_area=? AND terisi>0');$a2->execute([(int)$t['id_area']]);if($a2->rowCount()!==1)throw new RuntimeException('Jumlah terisi area gagal diperbarui.');
+  $log=$pdo->prepare('INSERT INTO tb_log_aktivitas(id_user,aktivitas) VALUES(?,?)');$log->execute([current_user()['id'],'Kendaraan '.$t['plat_nomor'].' keluar; transaksi #'.$id.', biaya '.$cost.', pembayaran '.$method]);$pdo->commit();
+  if ($method === 'qris') {
+   require_once __DIR__.'/../includes/midtrans.php';
+   try {
+    if (midtrans_is_enabled()) { midtrans_create_qris_for_transaction($pdo,$id,(int)current_user()['id']); flash('success','Transaksi keluar tercatat. QRIS dinamis Midtrans dibuat; tunggu pembayaran terverifikasi.'); }
+    else { flash('error','Transaksi keluar tercatat tetapi QR belum dibuat. Konfigurasikan Server Key Midtrans Sandbox terlebih dahulu.'); }
+   } catch (Throwable $paymentError) { error_log('[ParkirSTRD checkout Midtrans] '.$paymentError->getMessage()); flash('error','Transaksi keluar sudah tercatat, tetapi QR Midtrans belum berhasil dibuat. Periksa konfigurasi atau coba buat QR ulang dari menu Pembayaran QRIS.'); }
+   redirect('petugas/pembayaran.php?transaction='.$id);
+  }
+  flash('success','Transaksi keluar selesai dan tercatat sebagai pembayaran tunai. Total '.rupiah($cost).'.');redirect('petugas/struk.php?id='.$id);
+ }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();$error=$e instanceof InvalidArgumentException?$e->getMessage():'Transaksi keluar gagal dan semua perubahan telah dibatalkan.';if(!($e instanceof InvalidArgumentException))error_log('[ParkirSTRD exit] '.$e->getMessage());}
+}
+$q=trim((string)($_GET['q']??''));$id=(int)($_GET['id']??0);$p=[];$w="t.status='masuk'";if($id>0){$w.=' AND t.id_parkir=?';$p[]=$id;}if($q!==''){$w.=' AND (k.plat_nomor LIKE ? OR k.pemilik LIKE ? OR CAST(t.id_parkir AS CHAR) LIKE ?)';array_push($p,'%'.$q.'%','%'.$q.'%','%'.$q.'%');}
+$s=$pdo->prepare("SELECT t.id_parkir,t.waktu_masuk,t.tarif_saat_masuk,k.plat_nomor,k.jenis_kendaraan,k.pemilik,a.nama_area,c.kode_kartu,TIMESTAMPDIFF(SECOND,t.waktu_masuk,NOW()) AS elapsed FROM tb_transaksi t JOIN tb_kendaraan k ON k.id_kendaraan=t.id_kendaraan JOIN tb_area_parkir a ON a.id_area=t.id_area LEFT JOIN tb_kartu_parkir c ON c.id_kartu=t.id_kartu WHERE $w ORDER BY t.waktu_masuk ASC LIMIT 100");$s->execute($p);$rows=$s->fetchAll();render_header('Transaksi Kendaraan Keluar','keluar');?>
+<div class="page-intro"><div><h2>Proses kendaraan keluar</h2><p>Biaya dihitung per jam, dibulatkan ke atas, minimal satu jam.</p></div><a class="btn btn-secondary" href="<?= h(url('petugas/kendaraan-aktif.php')) ?>">Kendaraan aktif</a></div>
+<?php if($error): ?><div class="alert alert-error"><?= h($error) ?></div><?php endif; ?>
+<section class="panel"><div class="table-toolbar"><div><strong>Pilih transaksi aktif</strong><div class="muted" style="margin-top:4px">Pilih tunai atau QRIS. QRIS menggunakan QR dinamis Midtrans dan status lunas diverifikasi melalui API/webhook.</div></div><form method="get" class="toolbar-right"><div class="search-box"><input name="q" value="<?= h($q) ?>" placeholder="Plat, pemilik, ID transaksi"></div><button class="btn btn-secondary">Cari</button></form></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Plat nomor</th><th>Barcode</th><th>Area</th><th>Masuk</th><th>Durasi</th><th>Tarif/jam</th><th>Estimasi</th><th>Pembayaran & aksi</th></tr></thead><tbody>
+<?php foreach($rows as $r):$hrs=max(1,(int)ceil((int)$r['elapsed']/3600));$amount=$hrs*(float)$r['tarif_saat_masuk'];?><tr><td class="td-main">#<?= (int)$r['id_parkir'] ?></td><td class="td-main"><?= h($r['plat_nomor']) ?><div class="muted"><?= h(ucfirst($r['jenis_kendaraan']).' · '.$r['pemilik']) ?></div></td><td><div class="barcode-wrap"><svg data-barcode="<?= h($r['kode_kartu'] ?: 'PARKIRSTRD-OUT-'.$r['id_parkir']) ?>"></svg><span class="barcode-caption">Kartu parkir</span></div></td><td><?= h($r['nama_area']) ?></td><td><?= h(tanggal($r['waktu_masuk'])) ?></td><td><?= $hrs ?> jam</td><td><?= h(rupiah($r['tarif_saat_masuk'])) ?></td><td class="td-main"><?= h(rupiah($amount)) ?></td><td><form method="post" class="exit-payment-form" onsubmit="return confirm('Selesaikan transaksi #<?= (int)$r['id_parkir'] ?>? Biaya final dihitung ulang dari waktu server.');"><?= csrf_field() ?><input type="hidden" name="id_parkir" value="<?= (int)$r['id_parkir'] ?>"><div class="field"><select name="metode_pembayaran" aria-label="Metode pembayaran"><option value="tunai">Tunai</option><option value="qris">QRIS</option></select></div><button class="btn btn-primary btn-sm" style="margin-top:7px">Proses keluar</button></form></td></tr><?php endforeach;if(!$rows): ?><tr><td colspan="9"><div class="empty-state"><div class="empty-icon">✓</div><strong>Tidak ada transaksi aktif</strong>Kendaraan yang sedang parkir akan muncul di sini.</div></td></tr><?php endif; ?></tbody></table></div></section><?php render_footer(); ?>
